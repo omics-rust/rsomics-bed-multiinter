@@ -201,22 +201,30 @@ pub fn multiinter<R: Read, W: Write>(
         }
 
         // Sweep: track which files are "active" (have depth > 0) at each coord.
+        // Per-file depth tracks nesting so we know exactly when presence changes.
+        // A new output row is emitted only when the PRESENCE SET changes — matching
+        // bedtools' behaviour of outputting 0/1 per file, not raw depth.
         let mut depth = vec![0u32; n];
         let mut active_count = 0usize;
-        let mut prev_coord: i64 = 0;
-        let mut first = true;
+        let mut segment_start: i64 = 0;
+        let mut in_segment = false;
 
         while let Some(event) = queue.pop() {
             let coord = event.coord;
 
-            // Emit the segment [prev_coord, coord) with current depth state,
-            // but only if we have moved and there is something to report
-            // (i.e., depth > 0).
-            if !first && coord > prev_coord && active_count > 0 {
+            // Does this event change which files are PRESENT (depth 0→1 or 1→0)?
+            let presence_changes = if event.is_start {
+                depth[event.file_idx] == 0
+            } else {
+                depth[event.file_idx] == 1
+            };
+
+            // When presence set changes: close the current open segment (if any).
+            if presence_changes && in_segment && coord > segment_start {
                 emit_row(
                     &mut writer,
                     &chrom,
-                    prev_coord,
+                    segment_start,
                     coord,
                     active_count,
                     &depth,
@@ -224,11 +232,12 @@ pub fn multiinter<R: Read, W: Write>(
                 )?;
             }
 
+            // Update depth.
             if event.is_start {
-                if depth[event.file_idx] == 0 {
+                depth[event.file_idx] += 1;
+                if depth[event.file_idx] == 1 {
                     active_count += 1;
                 }
-                depth[event.file_idx] += 1;
             } else {
                 depth[event.file_idx] -= 1;
                 if depth[event.file_idx] == 0 {
@@ -236,8 +245,15 @@ pub fn multiinter<R: Read, W: Write>(
                 }
             }
 
-            prev_coord = coord;
-            first = false;
+            // After updating, start a new segment at coord if there are active files.
+            if presence_changes {
+                if active_count > 0 {
+                    segment_start = coord;
+                    in_segment = true;
+                } else {
+                    in_segment = false;
+                }
+            }
         }
     }
 
@@ -272,7 +288,7 @@ fn emit_row<W: Write>(
 
     write!(w, "{chrom}\t{start}\t{end}\t{active_count}\t{list}").map_err(RsomicsError::Io)?;
     for &d in depth {
-        write!(w, "\t{d}").map_err(RsomicsError::Io)?;
+        write!(w, "\t{}", u32::from(d > 0)).map_err(RsomicsError::Io)?;
     }
     writeln!(w).map_err(RsomicsError::Io)
 }
