@@ -1,6 +1,6 @@
 [package]
 name = "rsomics-bed-multiinter"
-version = "0.1.0"
+version = "0.1.1"
 description = "Multi-file interval intersection depth — bedtools multiinter equivalent"
 edition = "2024"
 rust-version = "1.91"
