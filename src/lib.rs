@@ -29,9 +29,6 @@ use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 
 use rsomics_common::{Result, RsomicsError};
 
-// ── Data types ─────────────────────────────────────────────────────────────
-
-/// A parsed BED record (first three columns only).
 #[derive(Debug, Clone)]
 struct Bed3 {
     chrom: String,
@@ -39,15 +36,11 @@ struct Bed3 {
     end: i64,
 }
 
-/// One coordinate event: a start or end of a file's interval.
 #[derive(Debug, Eq, PartialEq)]
 struct Event {
-    /// Coordinate position.
     coord: i64,
-    /// Whether this is a start (true) or end (false) event.
     is_start: bool,
-    /// Which file (0-based index) this event belongs to.
-    file_idx: usize,
+    file_idx: usize, // 0-based
 }
 
 /// Events are ordered by coord ascending, then ends before starts at the same
@@ -68,11 +61,8 @@ impl PartialOrd for Event {
     }
 }
 
-// ── Reader ─────────────────────────────────────────────────────────────────
-
 struct FileReader<R: BufRead> {
     reader: R,
-    /// The buffered "next" record (peeked but not yet consumed).
     peeked: Option<Bed3>,
 }
 
@@ -118,12 +108,10 @@ impl<R: BufRead> FileReader<R> {
         }
     }
 
-    /// Peek at the current record without consuming it.
     fn peek(&self) -> Option<&Bed3> {
         self.peeked.as_ref()
     }
 
-    /// Consume and return the current record, loading the next.
     fn next(&mut self) -> Result<Option<Bed3>> {
         let cur = self.peeked.take();
         self.peeked = self.read_next()?;
@@ -131,12 +119,6 @@ impl<R: BufRead> FileReader<R> {
     }
 }
 
-// ── Core sweep ─────────────────────────────────────────────────────────────
-
-/// Run the multi-interval intersection sweep.
-///
-/// Reads N BED files from `readers` (each `(impl Read)`), sweeps coordinates,
-/// and writes the result table to `out`.
 pub fn multiinter<R: Read, W: Write>(
     readers: Vec<R>,
     names: &[String],
@@ -159,13 +141,9 @@ pub fn multiinter<R: Read, W: Write>(
         writeln!(writer).map_err(RsomicsError::Io)?;
     }
 
-    // Determine chromosome processing order: first appearance across all files.
-    // We collect the first chrom of each file (their "current" chrom) and build
-    // an ordered list as we process.
     let mut processed_chroms: Vec<String> = Vec::new();
 
     loop {
-        // Find the lexicographically smallest chrom among all files' current records.
         let next_chrom = file_readers
             .iter()
             .filter_map(|fr| fr.peek().map(|r| r.chrom.as_str()))
@@ -180,11 +158,9 @@ pub fn multiinter<R: Read, W: Write>(
             processed_chroms.push(chrom.clone());
         }
 
-        // Build the event queue for this chromosome from all files.
         let mut queue: BinaryHeap<Event> = BinaryHeap::new();
 
         for (file_idx, fr) in file_readers.iter_mut().enumerate() {
-            // Consume all intervals on this chromosome, pushing events.
             while fr.peek().is_some_and(|r| r.chrom == chrom) {
                 let rec = fr.next()?.unwrap();
                 queue.push(Event {
@@ -200,10 +176,9 @@ pub fn multiinter<R: Read, W: Write>(
             }
         }
 
-        // Sweep: track which files are "active" (have depth > 0) at each coord.
-        // Per-file depth tracks nesting so we know exactly when presence changes.
-        // A new output row is emitted only when the PRESENCE SET changes — matching
-        // bedtools' behaviour of outputting 0/1 per file, not raw depth.
+        // Per-file depth to detect 0→1 / 1→0 presence transitions; output rows
+        // are emitted per PRESENCE SET change, not per raw depth change, matching
+        // bedtools' 0/1 per-file output.
         let mut depth = vec![0u32; n];
         let mut active_count = 0usize;
         let mut segment_start: i64 = 0;
@@ -212,14 +187,12 @@ pub fn multiinter<R: Read, W: Write>(
         while let Some(event) = queue.pop() {
             let coord = event.coord;
 
-            // Does this event change which files are PRESENT (depth 0→1 or 1→0)?
             let presence_changes = if event.is_start {
                 depth[event.file_idx] == 0
             } else {
                 depth[event.file_idx] == 1
             };
 
-            // When presence set changes: close the current open segment (if any).
             if presence_changes && in_segment && coord > segment_start {
                 emit_row(
                     &mut writer,
@@ -232,7 +205,6 @@ pub fn multiinter<R: Read, W: Write>(
                 )?;
             }
 
-            // Update depth.
             if event.is_start {
                 depth[event.file_idx] += 1;
                 if depth[event.file_idx] == 1 {
@@ -245,7 +217,6 @@ pub fn multiinter<R: Read, W: Write>(
                 }
             }
 
-            // After updating, start a new segment at coord if there are active files.
             if presence_changes {
                 if active_count > 0 {
                     segment_start = coord;
@@ -270,7 +241,6 @@ fn emit_row<W: Write>(
     depth: &[u32],
     names: &[String],
 ) -> Result<()> {
-    // Build the comma-separated list of covering file names.
     let mut list = String::new();
     let mut first = true;
     for (i, &d) in depth.iter().enumerate() {
@@ -292,8 +262,6 @@ fn emit_row<W: Write>(
     }
     writeln!(w).map_err(RsomicsError::Io)
 }
-
-// ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

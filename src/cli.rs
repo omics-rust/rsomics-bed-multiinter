@@ -13,11 +13,6 @@ pub const META: ToolMeta = ToolMeta {
     version: env!("CARGO_PKG_VERSION"),
 };
 
-/// Report per-base-position depth across N sorted BED files.
-///
-/// Sweeps coordinates across all input files simultaneously, emitting one row
-/// per contiguous run of constant intersection depth. Output columns:
-/// chrom, start, end, depth, list, file1, ..., fileN.
 #[derive(Parser, Debug)]
 #[command(name = "rsomics-bed-multiinter", disable_help_flag = true)]
 pub struct Cli {
