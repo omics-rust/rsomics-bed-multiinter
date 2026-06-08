@@ -65,6 +65,25 @@ fn parse_table(s: &str) -> Vec<(String, i64, i64, usize)> {
         .collect()
 }
 
+fn golden(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(name)
+}
+
+// Byte-for-byte against output frozen from `bedtools multiinter -i a.bed b.bed`
+// (bedtools v2.31.1). Always runs so CI guards the full multiinter table —
+// flatten boundaries, depth, and per-file membership columns — even where
+// bedtools is absent.
+#[test]
+fn matches_bedtools_golden() {
+    let a = golden("a.bed");
+    let b = golden("b.bed");
+    let ours = run_ours(&["-i", a.to_str().unwrap(), b.to_str().unwrap()]);
+    let want = std::fs::read_to_string(golden("expected_ab.txt")).unwrap();
+    assert_eq!(ours, want);
+}
+
 #[test]
 fn no_overlap_two_files() {
     let a = write_tmp("multiinter_compat_a1.bed", "chr1\t100\t200\n");
